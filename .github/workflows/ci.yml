@@ -19,6 +19,10 @@ jobs:
       matrix:
         project: [frontend, backend]
 
+    permissions:
+      checks: write
+      pull-requests: write
+
     steps:
       - uses: actions/checkout@v4
 
