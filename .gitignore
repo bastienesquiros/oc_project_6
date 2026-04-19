@@ -1,1 +1,4 @@
 .idea
+
+# Test reports (generated artifacts)
+test-results/

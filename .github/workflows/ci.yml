@@ -1,0 +1,174 @@
+name: CI/CD
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ── Test ──────────────────────────────────────────────────────────────────────
+  test:
+    name: Test – ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [frontend, backend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Frontend ────────────────────────────────────────────────────────────
+      - name: Setup Node.js
+        if: matrix.project == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        if: matrix.project == 'frontend'
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        if: matrix.project == 'frontend'
+        working-directory: frontend
+        run: npm test
+
+      - name: Collect frontend test results
+        if: ${{ always() && matrix.project == 'frontend' }}
+        run: |
+          mkdir -p test-results
+          find frontend/reports -name "*.xml" -exec cp {} test-results/ \; 2>/dev/null || true
+
+      # ── Backend ─────────────────────────────────────────────────────────────
+      - name: Setup Java 21
+        if: matrix.project == 'backend'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Run backend tests
+        if: matrix.project == 'backend'
+        working-directory: backend
+        run: ./gradlew clean test --no-daemon
+
+      - name: Collect backend test results
+        if: ${{ always() && matrix.project == 'backend' }}
+        run: |
+          mkdir -p test-results
+          cp backend/build/test-results/test/*.xml test-results/ 2>/dev/null || true
+
+      # ── Common ──────────────────────────────────────────────────────────────
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: test-results/*.xml
+          check_name: Tests – ${{ matrix.project }}
+
+      - name: Upload test results artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.project }}
+          path: test-results/
+
+  # ── Build ─────────────────────────────────────────────────────────────────────
+  build:
+    name: Build & Push – ${{ matrix.project }}
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [frontend, backend]
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.project }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=${{ github.ref_name }}-,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.project }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Release ───────────────────────────────────────────────────────────────────
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run semantic-release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          extra_plugins: |
+            @semantic-release/changelog
+            @semantic-release/git
+
+      - name: Retag Docker images with semver
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: |
+          VERSION="${{ steps.semantic.outputs.new_release_version }}"
+          for project in frontend backend; do
+            IMAGE="${{ env.REGISTRY }}/${{ github.repository }}/$project"
+            docker pull "$IMAGE:main"
+            docker tag "$IMAGE:main" "$IMAGE:$VERSION"
+            docker push "$IMAGE:$VERSION"
+          done
