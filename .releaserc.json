@@ -6,8 +6,15 @@
     ["@semantic-release/changelog", {
       "changelogFile": "CHANGELOG.md"
     }],
+    ["@semantic-release/npm", {
+      "npmPublish": false,
+      "pkgRoot": "frontend"
+    }],
+    ["@semantic-release/exec", {
+      "prepareCmd": "sed -i \"s/^version = '.*'/version = '${nextRelease.version}'/\" backend/build.gradle"
+    }],
     ["@semantic-release/git", {
-      "assets": ["CHANGELOG.md"],
+      "assets": ["CHANGELOG.md", "frontend/package.json", "backend/build.gradle"],
       "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
     }],
     "@semantic-release/github"
