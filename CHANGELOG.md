@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/bastienesquiros/oc_project_6/compare/v1.0.0...v1.1.0) (2026-04-19)
+
+
+### Features
+
+* Adding version bump^from semantic bot ([fccdd4d](https://github.com/bastienesquiros/oc_project_6/commit/fccdd4dff3143e2f8d845ffafb98fe61aa3fcbc0))
+
 # 1.0.0 (2026-04-19)
 
 
